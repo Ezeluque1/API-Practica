@@ -29,7 +29,7 @@ jobs:
     env:
       NODE_ENV: test
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/instituto_test?schema=public
-      JWT_SECRET: secreto-solo-para-ci-no-usar-en-produccion
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
       CLOUDINARY_CLOUD_NAME: ci-dummy
       CLOUDINARY_API_KEY: ci-dummy
       CLOUDINARY_API_SECRET: ci-dummy
