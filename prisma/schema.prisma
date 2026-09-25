@@ -1,0 +1,393 @@
+// Schema de Prisma 6 - https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum Rol {
+  ADMIN
+  USUARIO
+}
+
+enum Modalidad {
+  PRESENCIAL
+  VIRTUAL
+  HIBRIDA
+}
+
+enum TipoPublicacion {
+  NOTICIA
+  EVENTO
+}
+
+enum EstadoMensaje {
+  NO_LEIDO
+  LEIDO
+  RESPONDIDO
+}
+
+// ============================================================
+// SEDES
+// ============================================================
+
+model Sede {
+  id         String   @id @default(cuid())
+  nombre     String
+  ciudad     String
+  provincia  String
+  direccion  String?
+  telefono   String?
+  email      String?
+
+  // Soft delete / dar de baja sin borrar, igual que Carrera.activa.
+  // OJO: una sede dada de baja sigue ocupando su lugar en el unique de
+  // (nombre, ciudad). El service lo detecta y avisa que hay que reactivarla.
+  activa     Boolean  @default(true)
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  carreras   CarreraSede[] 
+  informacionInstitucional InformacionInstitucional?
+
+  // No puede haber dos sedes con el mismo nombre en la misma ciudad.
+  // Permite "Sede Centro" en Cordoba y en Rosario, pero no dos veces en una.
+  // Prisma tira P2002 al violarlo y el errorHandler lo devuelve como 409.
+  @@unique([nombre, ciudad])
+
+  // Índices para búsqueda por ciudad/provincia cuando hay muchas sedes
+  @@index([ciudad])
+  @@index([provincia])
+  @@index([nombre])
+  @@index([activa])
+}
+
+// ============================================================
+// CARRERAS
+// ============================================================
+
+model Carrera {
+  id             String    @id @default(cuid())
+  nombre         String
+  slug           String    @unique
+  descripcion    String?
+  duracionAnios  Int?
+  tituloOtorgado String?
+  modalidad      Modalidad
+
+  // Soft delete / ocultar sin borrar (dar de baja)
+  activa         Boolean   @default(true)
+
+  // Imagen representativa de la carrera (tarjeta del listado, pagina de
+  // detalle). Se guardan las dos: la URL es lo que consume el front, y el
+  // publicId es lo unico que permite borrar el archivo de Cloudinary despues.
+  // La URL sola no alcanza. Mismo par que usa Imagen en el modulo de albums.
+  //
+  // Una sola imagen no justifica una tabla aparte: no hay orden, ni portada
+  // que elegir, ni relacion que se consulte por si misma.
+  imagenUrl      String?
+  imagenPublicId String?
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  sedes          CarreraSede[]
+  preinscripciones Preinscripcion[]
+
+  // Índices para listado, filtro y búsqueda por nombre/palabra clave
+  @@index([nombre])
+  @@index([modalidad])
+  @@index([activa])
+}
+
+// Tabla intermedia: una carrera puede dictarse en varias sedes
+// y una sede puede dictar varias carreras
+model CarreraSede {
+  carreraId String
+  sedeId    String
+
+  carrera   Carrera @relation(fields: [carreraId], references: [id], onDelete: Cascade)
+  sede      Sede    @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+
+  @@id([carreraId, sedeId])
+  @@index([sedeId])
+  @@index([carreraId])
+}
+
+// ============================================================
+// USUARIOS
+// ============================================================
+
+model Usuario {
+  id            String    @id @default(cuid())
+  nombre        String
+  apellido      String
+  email         String    @unique
+  dni           String    @unique
+  passwordHash  String
+  rol           Rol       @default(USUARIO)
+
+  // Soft delete / desactivar sin borrar
+  activo        Boolean   @default(true)
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  resetTokens   PasswordResetToken[]
+  publicaciones Publicacion[]
+  albums        Album[]
+  refreshTokens RefreshToken[]
+
+  // Búsqueda admin por nombre, email o DNI
+  @@index([nombre, apellido])
+  @@index([email])
+  @@index([dni])
+}
+
+// Tokens para recuperar/resetear contraseña
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  usuarioId String
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usado     Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([usuarioId])
+}
+
+// Refresh tokens de sesión, permite invalidar en logout
+model RefreshToken {
+  id         String   @id @default(cuid())
+  token      String   @unique
+  usuarioId  String
+  usuario    Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  revocado   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([usuarioId])
+}
+
+// ============================================================
+// NOTICIAS Y EVENTOS
+// ============================================================
+
+model Publicacion {
+  id          String          @id @default(cuid())
+  titulo      String
+  slug        String          @unique
+  resumen     String?
+  contenido   String
+  tipo        TipoPublicacion
+  imagenUrl   String?
+
+  // Solo aplica a eventos (fecha del evento en sí)
+  fechaEvento DateTime?
+
+  destacada   Boolean         @default(false)
+
+  autorId     String?
+  autor       Usuario?        @relation(fields: [autorId], references: [id], onDelete: SetNull)
+
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  // Filtro por tipo/fecha y búsqueda por título/palabra clave
+  @@index([tipo])
+  @@index([createdAt])
+  @@index([fechaEvento])
+  @@index([titulo])
+  @@index([destacada])
+}
+
+// ============================================================
+// CONTACTO
+// ============================================================
+
+model MensajeContacto {
+  id           String        @id @default(cuid())
+  nombre       String
+  email        String
+  telefono     String?
+  asunto       String?
+  mensaje      String
+
+  estado       EstadoMensaje @default(NO_LEIDO)
+
+  // Respuesta / derivación (opcional, si integran email)
+  respuesta    String?
+  respondidoAt DateTime?
+
+  createdAt    DateTime      @default(now())
+
+  // Búsqueda admin por nombre o email del remitente
+  @@index([nombre])
+  @@index([email])
+  @@index([estado])
+}
+// ============================================================
+// ALBUMS / GALERIA DE FOTOS
+// ============================================================
+
+model Album {
+  id          String    @id @default(cuid())
+  titulo      String
+  slug        String    @unique
+  descripcion String?
+
+  // Fecha del acto/evento que retrata el album, no la de carga.
+  fecha       DateTime?
+
+  // Visibilidad publica y baja logica en un solo campo, igual que Sede.activa:
+  // el listado publico filtra activo=true, DELETE lo pone en false y
+  // POST /reactivar lo vuelve a true. No hay un segundo flag de "publicado".
+  activo      Boolean   @default(true)
+
+  // Portada: apunta a una de las imagenes del album. Es nullable porque un
+  // album recien creado todavia no tiene fotos, y @unique porque Prisma pide
+  // unicidad del lado que guarda la FK para modelar un 1-1.
+  // Con la FK, "hay a lo sumo una portada" lo garantiza la base; con un
+  // booleano esPortada habria que sostenerlo a mano en cada escritura.
+  portadaId   String?   @unique
+  portada     Imagen?   @relation("AlbumPortada", fields: [portadaId], references: [id], onDelete: SetNull)
+
+  imagenes    Imagen[]  @relation("AlbumImagenes")
+
+  autorId     String?
+  autor       Usuario?  @relation(fields: [autorId], references: [id], onDelete: SetNull)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([activo])
+  @@index([fecha])
+  @@index([titulo])
+}
+
+model Imagen {
+  id        String   @id @default(cuid())
+
+  albumId   String
+  album     Album    @relation("AlbumImagenes", fields: [albumId], references: [id], onDelete: Cascade)
+
+  // Lo unico que consume el front.
+  url       String
+
+  // Identificador interno de Cloudinary. Sin esto el archivo no se puede
+  // borrar nunca de la nube: la URL sola no alcanza.
+  publicId  String   @unique
+
+  // Metadatos que devuelve Cloudinary al subir. Sirven para que el front
+  // reserve el espacio antes de que cargue la imagen y evite el salto de layout.
+  width     Int?
+  height    Int?
+  formato   String?
+  bytes     Int?
+
+  createdAt DateTime @default(now())
+
+  // Back-relation de Album.portada. No agrega ninguna columna a esta tabla.
+  portadaDe Album?   @relation("AlbumPortada")
+
+  @@index([albumId])
+}
+
+// ============================================================
+// PREINSCRIPCION
+// ============================================================
+
+model Preinscripcion {
+  id              String   @id @default(cuid())
+
+  nombre          String
+  apellido        String
+
+  // Se guarda normalizado (sin puntos, espacios ni guiones, en mayusculas)
+  // para que el unique de abajo sirva de verdad: "12.345.678" y "12345678"
+  // son la misma persona y tienen que chocar entre si.
+  documento       String
+
+  // @db.Date y no DateTime a secas: una fecha de nacimiento no tiene hora, y
+  // guardarla como timestamp la corre un dia entero segun la zona horaria.
+  fechaNacimiento DateTime @db.Date
+
+  nacionalidad    String
+
+  // Domicilio aplanado en tres columnas. No amerita una tabla aparte: no se
+  // consulta por si mismo ni se comparte con ningun otro registro.
+  direccion       String
+  localidad       String
+  provincia       String
+
+  telefono        String
+  email           String
+
+  // Restrict: si una carrera tiene gente anotada, no se puede borrar la
+  // carrera sin decidir antes que pasa con esas preinscripciones.
+  carreraId       String
+  carrera         Carrera  @relation(fields: [carreraId], references: [id], onDelete: Restrict)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Una persona no se preinscribe dos veces a la misma carrera, pero si puede
+  // anotarse a varias. Prisma tira P2002 al violarlo y el service lo traduce
+  // a un 409 con un mensaje entendible.
+  @@unique([documento, carreraId])
+
+  @@index([carreraId])
+  @@index([createdAt])
+  @@index([apellido, nombre])
+}
+
+// ============================================================
+// INFORMACION INSTITUCIONAL (por sede)
+// ============================================================
+
+model InformacionInstitucional {
+  id       String  @id @default(cuid())
+  nombre   String
+  lema     String?
+  historia String?
+  mision   String?
+  vision   String?
+
+  sedeId   String  @unique
+  sede     Sede    @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  autoridades Autoridad[]
+
+  @@index([sedeId])
+}
+
+model Autoridad {
+  id          String  @id @default(cuid())
+  nombre      String
+  cargo       String
+  imagen      String?
+  orden       Int     @default(0)
+  descripcion String?
+
+  informacionInstitucionalId String
+  informacionInstitucional   InformacionInstitucional @relation(fields: [informacionInstitucionalId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([informacionInstitucionalId])
+  @@index([orden])
+}

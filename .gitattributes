@@ -1,0 +1,9 @@
+# Normaliza los finales de linea: LF en el repo, nativo en cada maquina.
+# Sin esto, un equipo mixto Windows/Linux ve diffs enteros por CRLF.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.pdf binary

@@ -1,0 +1,51 @@
+{
+  "name": "api-instituto",
+  "version": "1.0.0",
+  "description": "API REST del Instituto - Node.js + Express + Prisma 6 + PostgreSQL",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test:unit": "jest --testPathPatterns=tests/unit",
+    "test:integration": "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand tests/integration",
+    "test:integration:setup": "NODE_ENV=test npx prisma migrate deploy",
+    "test:integration:full": "npm run test:integration:setup && npm run test:integration",
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "@types/supertest": "^7.2.1",
+    "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.11.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "helmet": "^8.3.0",
+    "jest": "^30.5.1",
+    "jsonwebtoken": "^9.0.3",
+    "morgan": "^1.11.0",
+    "multer": "^2.3.0",
+    "supertest": "^7.2.2",
+    "swagger-ui-express": "^5.0.1",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@babel/preset-env": "^7.29.7",
+    "@types/express": "^5.0.6",
+    "@types/jest": "^30.0.0",
+    "cross-env": "^10.1.0",
+    "dotenv-cli": "^11.0.0",
+    "prisma": "^6.19.3"
+  }
+}

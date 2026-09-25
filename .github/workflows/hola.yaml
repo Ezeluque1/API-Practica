@@ -1,0 +1,22 @@
+name: Hola CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  saludo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Saludar
+        run: echo "Hola desde GitHub Actions"
+
+      - name: Mostrar dónde estamos
+        run: |
+          pwd
+          ls -la
+          node --version

@@ -1,0 +1,3200 @@
+# ============================================================================
+# Documentacion de la API - OpenAPI 3.1
+#
+# TODA la documentacion se escribe en ESTE archivo, nunca en los routers.
+# Los routers quedan solo con logica de ruteo.
+#
+# Se ve en:  http://localhost:3000/api/docs                (local)
+#            https://api-instituto.onrender.com/api/docs   (produccion)
+#
+# Al agregar un endpoint: sumar su tag en `tags` y su ruta en `paths`.
+# Abajo de `paths` hay un ejemplo completo comentado para copiar y pegar.
+# ============================================================================
+
+openapi: 3.1.0
+
+info:
+  title: API Instituto
+  version: 1.0.0
+  description: |
+    API REST del Instituto.
+
+    ### Forma de las respuestas
+
+    **En exito el body es el recurso pelado**, sin ningun sobre: un objeto en
+    las respuestas de un recurso y un array en los listados. Un listado vacio
+    devuelve `200 []`, nunca un 404. Un `DELETE` devuelve `204` sin body.
+
+    **En error** el body es un objeto `{ success: false, message, details? }`,
+    igual para todos los endpoints porque sale del manejador centralizado
+    (`src/middlewares/error.middleware.js`).
+
+    Son formas distintas a proposito: para saber si algo salio bien mirá el
+    **status HTTP**, no una propiedad del body.
+
+    Las respuestas de error estan definidas una sola vez en
+    `components/responses`: no las redefinas, usalas con `$ref`.
+
+servers:
+  - url: https://api-instituto.onrender.com/api
+    description: Produccion
+  - url: http://localhost:3000/api
+    description: Desarrollo local
+
+# Un tag por recurso. Agrupa los endpoints en la UI y define el orden en que
+# aparecen.
+tags:
+  - name: Sedes
+    description: Sedes donde se dictan las carreras
+  - name: Carreras
+    description: Carreras disponibles en el instituto
+  - name: Informacion Institucional
+    description: Información institucional de cada sede, con sus autoridades
+  - name: Usuarios
+    description: Autenticación, perfil y administración de usuarios
+  - name: Publicaciones
+    description: Noticias y eventos del instituto
+  - name: Contacto
+    description: Mensajes recibidos desde el formulario de contacto
+  - name: Albums
+    description: Galerias de fotos del instituto
+  - name: Preinscripciones
+    description: Aspirantes que se anotan a una carrera desde la web
+
+# Las rutas se escriben SIN el prefijo `/api`: ya esta incluido en `servers`.
+# Es decir, el endpoint GET /api/sedes se documenta aca como `/sedes`.
+#
+# `/sedes` es la referencia a copiar para los recursos que falten.
+paths:
+
+  /sedes:
+    get:
+      tags: [Sedes]
+      security:
+        # Auth opcional: el endpoint es publico, pero si llega un token se usa
+        # (lo necesita `incluirInactivas`). El `{}` es lo que lo marca como
+        # opcional; sin la lista entera, Swagger UI NO manda el token aunque
+        # hayas apretado Authorize, y el request sale anonimo.
+        - {}
+        - bearerAuth: []
+      summary: Lista todas las sedes
+      description: |
+        Devuelve todas las sedes ordenadas por nombre. Si no hay ninguna
+        devuelve `[]`, nunca un 404.
+
+        **No incluye las carreras**: para eso esta `GET /sedes/{id}`.
+
+        Por defecto trae **solo las sedes activas**. El endpoint es publico;
+        solo `incluirInactivas=true` exige un token de ADMIN.
+
+        ### Busqueda
+
+        Con `buscar` se filtra por **ciudad o provincia**: alcanza con que
+        matchee cualquiera de las dos. Es una coincidencia **parcial y sin
+        distinguir mayusculas**, asi que `cor` encuentra `Cordoba`.
+
+        Dos limites a tener presentes:
+
+        - **No ignora tildes**: `Cordoba` no encuentra `Cordoba` escrito con
+          acento. Resolverlo requiere la extension `unaccent` de Postgres.
+        - Un `buscar` vacio o con solo espacios **equivale a no filtrar**, no
+          es un error: asi un input de busqueda puede mandar el parametro
+          siempre, aunque este vacio.
+      parameters:
+        - name: buscar
+          in: query
+          required: false
+          description: >-
+            Filtra por ciudad o provincia. Coincidencia parcial, sin distinguir
+            mayusculas, sensible a tildes. Vacio equivale a no filtrar.
+          schema:
+            type: string
+            maxLength: 80
+          example: cordoba
+        - name: incluirInactivas
+          in: query
+          required: false
+          description: >-
+            Con `true` incluye tambien las sedes dadas de baja. **Requiere token
+            con rol ADMIN**: sin el, la respuesta es 403. Por defecto quedan
+            invisibles. Solo se aceptan los valores `true` y `false`; cualquier
+            otro da 400.
+          schema:
+            type: string
+            enum: ["true", "false"]
+            default: "false"
+      responses:
+        "200":
+          description: Listado de sedes (array vacio si no hay ninguna)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Sede" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    post:
+      tags: [Sedes]
+      summary: Crea una sede
+      description: |
+        No puede haber dos sedes con el mismo `nombre` en la misma `ciudad`.
+        Los textos se recortan (trim) antes de guardarse.
+
+        **Requiere token con rol ADMIN.**
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SedeInput" }
+      responses:
+        "201":
+          description: Sede creada
+          headers:
+            Location:
+              description: URL de la sede recien creada
+              schema: { type: string }
+              example: /api/sedes/clx1a2b3c4d5e6f7g8h9i0j1
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Sede" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: |
+            Ya existe una sede con ese nombre en esa ciudad. Hay dos casos y el
+            `message` los distingue:
+
+            - Choca con una sede **activa**: no se puede crear otra igual.
+            - Choca con una sede **dada de baja**: la fila sigue ocupando su
+              lugar en el indice unico. En ese caso `details.sedeId` trae el id
+              de esa sede, para poder ofrecer reactivarla en vez de crear una
+              nueva.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /sedes/{id}:
+    get:
+      tags: [Sedes]
+      security:
+        # Auth opcional: el endpoint es publico, pero si llega un token se usa
+        # (lo necesita `incluirInactivas`). El `{}` es lo que lo marca como
+        # opcional; sin la lista entera, Swagger UI NO manda el token aunque
+        # hayas apretado Authorize, y el request sale anonimo.
+        - {}
+        - bearerAuth: []
+      summary: Obtiene una sede por id, con sus carreras
+      description: |
+        A diferencia del listado, el detalle incluye las carreras que se
+        dictan en la sede.
+
+        Una sede **dada de baja devuelve 404**, igual que si no existiera. Con
+        `incluirInactivas=true` se devuelve de todos modos, pero eso exige un
+        token de ADMIN.
+
+        El endpoint en si es publico.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid de la sede
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+        - name: incluirInactivas
+          in: query
+          required: false
+          description: >-
+            Con `true` incluye tambien las sedes dadas de baja. **Requiere token
+            con rol ADMIN**: sin el, la respuesta es 403. Por defecto quedan
+            invisibles. Solo se aceptan los valores `true` y `false`; cualquier
+            otro da 400.
+          schema:
+            type: string
+            enum: ["true", "false"]
+            default: "false"
+      responses:
+        "200":
+          description: La sede pedida, con sus carreras
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SedeDetalle" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    patch:
+      tags: [Sedes]
+      summary: Modifica una sede
+      description: |
+        Actualizacion **parcial**: se manda solo lo que cambia. Hay que enviar
+        al menos un campo, un body vacio es un 400.
+
+        Los tres casos que conviene tener claros:
+
+        | Lo que mandas | Que pasa |
+        |---|---|
+        | omitis el campo | queda como estaba |
+        | `"telefono": null` | se borra el valor |
+        | `"telefono": ""` | **400** — para borrar se usa `null` |
+
+        `nombre`, `ciudad` y `provincia` son obligatorios en la base: no se
+        pueden poner en `null`, aunque si cambiar por otro valor.
+
+        Los textos se recortan (trim) antes de guardarse. La respuesta es la
+        sede sola, **sin** las carreras.
+
+        **No se puede editar una sede dada de baja**: devuelve 404. Primero hay
+        que reactivarla.
+
+        **Requiere token con rol ADMIN.**
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid de la sede
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SedeUpdateInput" }
+      responses:
+        "200":
+          description: La sede ya modificada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Sede" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >-
+            El cambio dejaria dos sedes con el mismo nombre en la misma ciudad.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    delete:
+      tags: [Sedes]
+      summary: Da de baja una sede
+      description: |
+        **Baja logica**: la sede no se borra de la base, se marca con
+        `activa: false`. Sus vinculos con carreras se conservan, que es lo que
+        permite reactivarla despues sin perder nada.
+
+        A partir de la baja deja de aparecer en el listado y en el detalle,
+        salvo que se pida `incluirInactivas=true`.
+
+        Sobre una sede **que ya estaba dada de baja devuelve 404**, no 204: es
+        la contracara de que una sede dada de baja sea invisible.
+
+        **Requiere token con rol ADMIN.**
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid de la sede
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+      responses:
+        "204":
+          description: Dada de baja. Sin body.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: La sede no existe o ya estaba dada de baja.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /sedes/{id}/reactivar:
+    post:
+      tags: [Sedes]
+      summary: Reactiva una sede dada de baja
+      description: |
+        Deshace la baja logica: vuelve a poner `activa: true`.
+
+        Es **idempotente**: sobre una sede que ya estaba activa devuelve 200 y
+        la sede, sin error. El front no necesita chequear el estado antes.
+
+        **Requiere token con rol ADMIN.**
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid de la sede
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+      responses:
+        "200":
+          description: La sede, ya activa
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Sede" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /sedes/{sedeId}/informacion-institucional:
+    get:
+      tags: [Informacion Institucional]
+      summary: Ver la información institucional de una sede
+      parameters:
+        - name: sedeId
+          in: path
+          required: true
+          schema: { type: string }
+          description: CUID de la sede
+      responses:
+        "200":
+          description: Información institucional de la sede
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InformacionInstitucional" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    post:
+      tags: [Informacion Institucional]
+      summary: Crear la información institucional de una sede
+      description: Solo disponible para administradores.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sedeId
+          in: path
+          required: true
+          schema: { type: string }
+          description: CUID de la sede
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InformacionInstitucionalInput" }
+      responses:
+        "201":
+          description: Información institucional creada correctamente
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InformacionInstitucional" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    put:
+      tags: [Informacion Institucional]
+      summary: Actualizar la información institucional de una sede
+      description: Solo disponible para administradores. Reemplaza el recurso completo.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sedeId
+          in: path
+          required: true
+          schema: { type: string }
+          description: CUID de la sede
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InformacionInstitucionalInput" }
+      responses:
+        "200":
+          description: Información institucional actualizada correctamente
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InformacionInstitucional" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /usuarios/registro:
+    post:
+      tags: [Usuarios]
+      summary: Registrar un nuevo usuario
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CrearUsuarioInput"
+      responses:
+        "201":
+          description: Usuario registrado correctamente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsuarioResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /carreras:
+    get:
+      tags: [Carreras]
+      summary: Lista todas las carreras
+      description: |
+        Devuelve todas las carreras activas ordenadas por nombre. Si no hay
+        ninguna devuelve `[]`, nunca un 404.
+
+        Permite buscar por nombre y filtrar por modalidad o sede.
+
+        Es el endpoint que alimenta el desplegable del formulario de
+        preinscripcion: el `id` de cada carrera de aca es el `carreraId` que
+        espera `POST /preinscripciones`. Como ya filtra las dadas de baja,
+        cualquier opcion de esta lista sirve para preinscribirse.
+      parameters:
+        - name: buscar
+          in: query
+          required: false
+          description: >-
+            Filtra por nombre. Coincidencia parcial y sin distinguir
+            mayusculas. Vacio equivale a no filtrar.
+          schema:
+            type: string
+            maxLength: 80
+          example: software
+
+        - name: modalidad
+          in: query
+          required: false
+          description: Filtra por modalidad de cursado.
+          schema:
+            type: string
+            enum: [PRESENCIAL, VIRTUAL, HIBRIDA]
+
+        - name: sede
+          in: query
+          required: false
+          description: Filtra las carreras que se dictan en la sede indicada.
+          schema:
+            type: string
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+
+      responses:
+        "200":
+          description: Listado de carreras (array vacio si no hay ninguna)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Carrera" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    post:
+      tags: [Carreras]
+      summary: Crea una carrera
+      description: |
+        **Requiere token con rol ADMIN.**
+
+        El `slug` se genera solo a partir del nombre y **no se puede elegir**.
+        Si el nombre se repite, se le agrega un sufijo (`-2`, `-3`, ...).
+
+        En `sedes` van los ids de las sedes donde se dicta. Es opcional: se
+        puede crear la carrera sin sedes y vincularlas después con un PATCH.
+        Si alguno de los ids no existe, **no se crea nada** y devuelve 400.
+
+        Ojo: la respuesta **no incluye** las sedes. `carreraPublicSelect` no
+        las trae, así que `sedes` es un campo de solo escritura. Para saber qué
+        carreras se dictan en una sede hay que ir por `GET /sedes/{id}`.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CarreraInput" }
+      responses:
+        "201":
+          description: La carrera creada. El header `Location` apunta al recurso.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Carrera" }
+        "400":
+          description: >-
+            El body es inválido, o alguna de las sedes indicadas no existe.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /carreras/{id}:
+    get:
+      tags: [Carreras]
+      summary: Obtiene una carrera por id
+      description: Devuelve el detalle de una carrera activa. Una carrera dada de baja devuelve 404, igual que si no existiera. El endpoint es publico.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid de la carrera
+          schema: { type: string }
+          example: clc1a2b3c4d5e6f7g8h9i0j1
+      responses:
+        "200":
+          description: La carrera pedida
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Carrera" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    patch:
+      tags: [Carreras]
+      summary: Modifica una carrera
+      description: |
+        **Requiere token con rol ADMIN.**
+
+        Actualización parcial: se manda solo lo que cambia.
+
+        - omitir un campo → queda como estaba
+        - mandarlo en `null` → se borra (solo los opcionales)
+        - mandarlo en `""` → 400; para borrar se usa `null`
+
+        **El `slug` no se puede editar** y tampoco cambia solo al cambiar el
+        nombre, para no romper URLs que ya lo referencien.
+
+        Si viene `sedes`, **reemplaza por completo** el conjunto de sedes
+        asignadas: no agrega ni quita de a una. Mandar `[]` la deja sin
+        ninguna.
+
+        Una carrera **dada de baja devuelve 404** y no se puede modificar. Hoy
+        no hay endpoint para reactivarla.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid de la carrera
+          schema: { type: string }
+          example: clc1a2b3c4d5e6f7g8h9i0j1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CarreraUpdateInput" }
+      responses:
+        "200":
+          description: La carrera ya modificada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Carrera" }
+        "400":
+          description: >-
+            El body es inválido, vino vacío, o alguna de las sedes indicadas no
+            existe.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: La carrera no existe o está dada de baja.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    delete:
+      tags: [Carreras]
+      summary: Da de baja una carrera (baja lógica)
+      description: |
+        **Requiere token con rol ADMIN.**
+
+        No borra nada: la fila queda con `activa: false`. A partir de acá la
+        carrera desaparece de `GET /carreras`, su detalle devuelve 404 y **no
+        se puede preinscribir gente a ella** (`POST /preinscripciones` da 409).
+
+        Los vínculos con sedes y las preinscripciones que ya existían se
+        conservan.
+
+        **Es irreversible desde la API**: hoy no hay endpoint para reactivar
+        una carrera dada de baja, a diferencia de sedes y álbumes.
+
+        Para borrarla de verdad está `DELETE /carreras/{id}/definitivo`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid de la carrera
+          schema: { type: string }
+          example: clc1a2b3c4d5e6f7g8h9i0j1
+      responses:
+        "204":
+          description: Dada de baja. Sin body.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: La carrera no existe o ya estaba dada de baja.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /carreras/{id}/imagen:
+    put:
+      tags: [Carreras]
+      summary: Carga o reemplaza la imagen de la carrera
+      description: |
+        **Requiere token con rol ADMIN.**
+
+        `multipart/form-data`. El archivo va en el campo **`imagen`**, uno solo.
+
+        Sirve para **cargar y para reemplazar**: si la carrera ya tenía imagen,
+        la nueva la pisa y la anterior se borra del servicio de imágenes. El
+        front no necesita averiguar antes si había una.
+
+        El backend recibe el archivo, lo sube a la nube y guarda en la base
+        **solo la URL**. El archivo nunca toca el disco del servidor.
+
+        | | |
+        |---|---|
+        | Tamaño máximo | 5 MB (`413` si se pasa) |
+        | Archivos | 1 (`400` si vienen más) |
+        | Formatos | JPEG, PNG, WebP, AVIF |
+
+        Devuelve la **carrera entera**, así el front se entera del `imagenUrl`
+        nuevo sin pedirla de nuevo.
+
+        **Las miniaturas no hay que generarlas**: se piden sobre la misma URL
+        insertando transformaciones, igual que en álbumes. Para una tarjeta de
+        400px: `.../upload/w_400,q_auto,f_auto/...`. No consume espacio extra.
+
+        Una carrera **dada de baja devuelve 404**, igual que el `PATCH`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid de la carrera
+          schema: { type: string }
+          example: clc1a2b3c4d5e6f7g8h9i0j1
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [imagen]
+              properties:
+                imagen:
+                  type: string
+                  format: binary
+                  description: Un archivo de imagen, hasta 5 MB.
+            encoding:
+              imagen:
+                contentType: image/jpeg, image/png, image/webp, image/avif
+      responses:
+        "200":
+          description: La carrera con su `imagenUrl` ya actualizado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Carrera" }
+        "400":
+          description: >-
+            No vino ningún archivo, el campo del formulario no se llama
+            `imagen`, vinieron dos o más, o el formato no está permitido.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: La carrera no existe o está dada de baja.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "502":
+          description: El servicio de imágenes no respondió. No se guardó nada.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    delete:
+      tags: [Carreras]
+      summary: Saca la imagen de la carrera
+      description: |
+        **Requiere token con rol ADMIN.**
+
+        Deja `imagenUrl` en `null` y **borra el archivo de la nube**. No se
+        puede deshacer: para cambiarla por otra conviene usar el `PUT`, que
+        hace las dos cosas de una.
+
+        Si la carrera no tiene imagen devuelve 404, igual que
+        `DELETE /albums/{id}/imagenes/{imagenId}`.
+
+        Devuelve la carrera, no un 204, para que el front vea el `imagenUrl` ya
+        en `null`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid de la carrera
+          schema: { type: string }
+          example: clc1a2b3c4d5e6f7g8h9i0j1
+      responses:
+        "200":
+          description: La carrera, ya sin imagen
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Carrera" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: >-
+            La carrera no existe, está dada de baja, o no tiene imagen.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /carreras/{id}/definitivo:
+    delete:
+      tags: [Carreras]
+      summary: Elimina una carrera definitivamente
+      description: |
+        **Requiere token con rol ADMIN.**
+
+        Borrado físico: la fila desaparece de la base y **no se puede
+        deshacer**. Los vínculos en `CarreraSede` se borran solos en cascada.
+
+        **No funciona si la carrera tiene preinscripciones**: esa relación es
+        `onDelete: Restrict`, así que la base frena el borrado y devuelve 409
+        diciendo cuántas hay. Es a propósito — borrarlas en cascada haría
+        desaparecer en silencio los datos de aspirantes reales. Si el objetivo
+        es sacarla del sitio, la baja lógica (`DELETE /carreras/{id}`) hace eso
+        sin perder nada.
+
+        A diferencia del PATCH, este endpoint **sí** funciona sobre una carrera
+        ya dada de baja.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid de la carrera
+          schema: { type: string }
+          example: clc1a2b3c4d5e6f7g8h9i0j1
+      responses:
+        "204":
+          description: Eliminada. Sin body.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: |
+            La carrera tiene preinscripciones asociadas. No se borró nada.
+
+            `details.preinscripciones` trae cuántas son.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                conPreinscripciones:
+                  value:
+                    success: false
+                    message: >-
+                      No se puede eliminar la carrera: tiene 3 preinscripciones
+                      asociadas. Usa la baja logica (DELETE /carreras/:id) para
+                      ocultarla sin perder los datos de los aspirantes.
+                    details:
+                      preinscripciones: 3
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /usuarios/login:
+    post:
+      tags: [Usuarios]
+      summary: Iniciar sesión
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: Inicio de sesión correcto
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /usuarios/logout:
+    post:
+      tags: [Usuarios]
+      summary: Cerrar sesión
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogoutInput"
+      responses:
+        "200":
+          description: Sesión cerrada correctamente
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /usuarios/recuperar-password:
+    post:
+      tags: [Usuarios]
+      summary: Solicitar recuperación de contraseña
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecuperarPasswordInput"
+      responses:
+        "200":
+          description: Token de recuperación generado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecuperarPasswordResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /usuarios/reset-password:
+    post:
+      tags: [Usuarios]
+      summary: Restablecer contraseña
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetPasswordInput"
+      responses:
+        "200":
+          description: Contraseña actualizada correctamente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /usuarios/perfil:
+    get:
+      tags: [Usuarios]
+      summary: Ver el perfil propio
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Perfil del usuario autenticado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsuarioResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    patch:
+      tags: [Usuarios]
+      summary: Editar el perfil propio
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActualizarPerfilInput"
+      responses:
+        "200":
+          description: Perfil actualizado correctamente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsuarioResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /usuarios:
+    get:
+      tags: [Usuarios]
+      summary: Listar todos los usuarios
+      description: Solo disponible para administradores.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Lista de usuarios
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsuariosResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /usuarios/buscar:
+    get:
+      tags: [Usuarios]
+      summary: Buscar usuarios
+      description: Busca usuarios por nombre, apellido, email o DNI. Solo administradores.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: buscar
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Texto a buscar
+      responses:
+        "200":
+          description: Usuarios encontrados
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsuariosResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /usuarios/{id}/rol:
+    patch:
+      tags: [Usuarios]
+      summary: Cambiar el rol de un usuario
+      description: Solo disponible para administradores.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: CUID del usuario
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CambiarRolInput"
+      responses:
+        "200":
+          description: Rol actualizado correctamente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsuarioResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /usuarios/{id}/desactivar:
+    patch:
+      tags: [Usuarios]
+      summary: Desactivar un usuario
+      description: Desactiva la cuenta sin eliminarla de la base de datos. Solo administradores.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: CUID del usuario
+      responses:
+        "200":
+          description: Usuario desactivado correctamente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsuarioResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /publicaciones:
+    get:
+      tags: [Publicaciones]
+      summary: Lista publicaciones (noticias y eventos)
+      description: |
+        Endpoint público. Devuelve el listado ordenado por `createdAt` descendente
+        (más recientes primero). Si no hay resultados devuelve `[]`, nunca 404.
+
+        Todos los filtros son opcionales y combinables.
+
+        ### Filtros
+
+        - `tipo`: `NOTICIA` o `EVENTO`
+        - `buscar`: búsqueda parcial, case-insensitive y accent-insensitive (ignora tildes) al menos en `titulo`, `resumen` y `contenido`.
+          Vacío o solo espacios equivale a no filtrar. Ej: `programacion` encuentra `programación`, `tecnologia` encuentra `tecnología`. Los caracteres `%`, `_` y `\` se interpretan literalmente.
+        - `destacada`: `true` o `false`
+        - `fechaDesde` / `fechaHasta`: rango de fechas ISO 8601 (datetime con offset, ej `2026-10-20T18:00:00.000Z`).
+          Validación: `fechaDesde` no puede ser posterior a `fechaHasta` (400).
+
+        ### Semántica de fechas
+
+        - Para `NOTICIA`, la fecha propia es `createdAt`
+        - Para `EVENTO`, la fecha específica es `fechaEvento`
+
+        Comportamiento del filtro de fechas:
+
+        - `?tipo=EVENTO&fechaDesde=...&fechaHasta=...` → filtra por `fechaEvento` en el rango
+        - `?tipo=NOTICIA&fechaDesde=...&fechaHasta=...` → filtra por `createdAt` en el rango
+        - `?fechaDesde=...&fechaHasta=...` sin `tipo` → trae publicaciones donde
+          `(tipo=EVENTO y fechaEvento en rango) OR (tipo=NOTICIA y createdAt en rango)`
+      parameters:
+        - name: tipo
+          in: query
+          required: false
+          description: Filtra por tipo de publicación
+          schema:
+            type: string
+            enum: [NOTICIA, EVENTO]
+        - name: buscar
+          in: query
+          required: false
+          description: >-
+            Búsqueda parcial, case-insensitive y accent-insensitive (ignora tildes) en titulo, resumen y contenido. Vacío equivale a no filtrar.
+            Ej: `programacion` encuentra `programación`, `PROGRAMACION` también. Los caracteres `%`, `_` y `\` se buscan como literales.
+          schema:
+            type: string
+            maxLength: 100
+          example: programacion
+        - name: fechaDesde
+          in: query
+          required: false
+          description: Fecha desde (inclusive) en formato ISO datetime
+          schema:
+            type: string
+            format: date-time
+          example: "2026-01-01T00:00:00.000Z"
+        - name: fechaHasta
+          in: query
+          required: false
+          description: Fecha hasta (inclusive) en formato ISO datetime
+          schema:
+            type: string
+            format: date-time
+          example: "2026-12-31T23:59:59.000Z"
+        - name: destacada
+          in: query
+          required: false
+          description: Filtra por destacada
+          schema:
+            type: string
+            enum: ["true", "false"]
+      responses:
+        "200":
+          description: Listado de publicaciones
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Publicacion" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    post:
+      tags: [Publicaciones]
+      summary: Crea una publicación
+      description: |
+        Crea una noticia o evento. El `slug` se genera automáticamente a partir del `titulo`
+        y se garantiza su unicidad (sufijo `-2`, `-3`, etc. si colisiona).
+
+        `autorId` no se envía en el body: se toma del usuario autenticado (JWT `sub`).
+
+        Reglas de `fechaEvento`:
+        - `tipo=EVENTO` → `fechaEvento` es obligatoria
+        - `tipo=NOTICIA` → `fechaEvento` queda en `null` (si se envía se ignora y se fuerza a null)
+
+        **Requiere token con rol ADMIN.**
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PublicacionInput" }
+      responses:
+        "201":
+          description: Publicación creada
+          headers:
+            Location:
+              description: URL de la publicación recién creada
+              schema: { type: string }
+              example: /api/publicaciones/clx1a2b3c4d5e6f7g8h9i0j1
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Publicacion" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /publicaciones/{id}:
+    get:
+      tags: [Publicaciones]
+      summary: Obtiene una publicación por id
+      description: |
+        Endpoint público. Incluye los datos del autor (sin información sensible).
+        Si no existe devuelve 404.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid de la publicación
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+      responses:
+        "200":
+          description: La publicación pedida
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Publicacion" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    patch:
+      tags: [Publicaciones]
+      summary: Modifica una publicación
+      description: |
+        Actualización **parcial**: se manda solo lo que cambia. Hay que enviar
+        al menos un campo, un body vacío es 400.
+
+        Campos modificables: `titulo`, `resumen`, `contenido`, `tipo`, `imagenUrl`, `fechaEvento`, `destacada`.
+        No se permite modificar manualmente `id`, `slug`, `autorId`, `createdAt`, `updatedAt`.
+
+        El `slug` permanece estable aunque cambie el `titulo`, para no romper URLs.
+
+        Para `destacada` basta con mandar `{"destacada": true}` o `false` en el PATCH normal;
+        no hay endpoint especial.
+
+        Contrato de nulos igual que Sedes:
+        | Lo que mandás | Qué pasa |
+        |---|---|
+        | omitís el campo | queda como estaba |
+        | `"resumen": null` | se borra el valor |
+        | `"resumen": ""` | **400** — para borrar se usa `null` |
+
+        Regla `fechaEvento`/`tipo` se valida sobre el **estado final** del registro
+        (combinando valores actuales con los nuevos). Por eso un PATCH que cambie
+        solo `tipo` a `EVENTO` sin `fechaEvento` dará 400 si el registro no tenía fecha,
+        y cambiar a `NOTICIA` fuerza `fechaEvento` a `null`.
+
+        **Requiere token con rol ADMIN.**
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid de la publicación
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PublicacionUpdateInput" }
+      responses:
+        "200":
+          description: La publicación ya modificada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Publicacion" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    delete:
+      tags: [Publicaciones]
+      summary: Elimina una publicación
+      description: |
+        Eliminación **física**: la fila se borra de la base (no hay `activa` ni `deletedAt` en este modelo).
+        Si no existe devuelve 404. Si se elimina correctamente devuelve 204 sin body.
+
+        **Requiere token con rol ADMIN.**
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid de la publicación
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+      responses:
+        "204":
+          description: Eliminada. Sin body.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /contacto:
+    post:
+      tags: [Contacto]
+      summary: Envía un mensaje de contacto
+      description: |
+        Endpoint **público**, sin autenticación: es el formulario de contacto
+        del sitio. El mensaje nace en estado `NO_LEIDO`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MensajeContactoInput" }
+      responses:
+        "201":
+          description: Mensaje de contacto creado
+          headers:
+            Location:
+              description: URL del mensaje recien creado
+              schema: { type: string }
+              example: /api/contacto/clx1a2b3c4d5e6f7g8h9i0j1
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MensajeContacto" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    get:
+      tags: [Contacto]
+      summary: Lista los mensajes de contacto
+      description: |
+        Devuelve todos los mensajes, ordenados por `createdAt` descendente
+        (mas recientes primero). Si no hay ninguno devuelve `[]`, nunca 404.
+
+        Filtro opcional por `estado`.
+
+        **Requiere token con rol ADMIN.**
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: estado
+          in: query
+          required: false
+          description: Filtra por estado del mensaje.
+          schema:
+            type: string
+            enum: [NO_LEIDO, LEIDO, RESPONDIDO]
+      responses:
+        "200":
+          description: Listado de mensajes de contacto (array vacio si no hay ninguno)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/MensajeContacto" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /contacto/{id}:
+    get:
+      tags: [Contacto]
+      summary: Obtiene un mensaje de contacto por id
+      description: |
+        **Requiere token con rol ADMIN.**
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid del mensaje de contacto
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+      responses:
+        "200":
+          description: El mensaje de contacto pedido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MensajeContacto" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    patch:
+      tags: [Contacto]
+      summary: Marca como leido o responde un mensaje de contacto
+      description: |
+        Actualizacion **parcial**: se manda solo lo que cambia (`estado` y/o
+        `respuesta`). Hay que enviar al menos un campo, un body vacio es 400.
+
+        Si se envia `respuesta` y el mensaje **todavia no tenia una respuesta
+        previa**, se fija automaticamente `respondidoAt = now()` y
+        `estado = RESPONDIDO`, sin importar que otro `estado` se haya mandado
+        en el mismo body.
+
+        **Requiere token con rol ADMIN.**
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid del mensaje de contacto
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MensajeContactoUpdateInput" }
+      responses:
+        "200":
+          description: El mensaje de contacto ya modificado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MensajeContacto" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    delete:
+      tags: [Contacto]
+      summary: Elimina un mensaje de contacto
+      description: |
+        Eliminacion **fisica**: la fila se borra de la base (no hay soft
+        delete en este modelo). Si no existe devuelve 404. Si se elimina
+        correctamente devuelve 204 sin body.
+
+        **Requiere token con rol ADMIN.**
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid del mensaje de contacto
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+      responses:
+        "204":
+          description: Eliminado. Sin body.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /albums:
+    get:
+      tags: [Albums]
+      summary: Lista los álbumes de fotos
+      security:
+        # Auth opcional: el endpoint es publico, pero si llega un token se usa
+        # (lo necesita `incluirInactivos`). El `{}` es lo que lo marca como
+        # opcional; sin la lista entera, Swagger UI NO manda el token aunque
+        # hayas apretado Authorize, y el request sale anonimo.
+        - {}
+        - bearerAuth: []
+      description: |
+        Endpoint público. Devuelve **solo los álbumes activos**.
+
+        Cada álbum viene con su **portada** y con `cantidadImagenes`, pero
+        **no** con el array completo de fotos: para eso está el detalle. Listar
+        30 álbumes de 40 fotos con todo adentro serían 1200 objetos que la
+        grilla no muestra.
+
+        Orden: primero por la fecha del evento (más reciente arriba) y después
+        por fecha de carga. Los que no tienen fecha van al final.
+      parameters:
+        - name: incluirInactivos
+          in: query
+          required: false
+          description: >-
+            Con `true` incluye también los álbumes dados de baja. **Requiere
+            token con rol ADMIN**: sin él, la respuesta es 403. Solo se aceptan
+            los valores `true` y `false`; cualquier otro da 400.
+          schema:
+            type: string
+            enum: ["true", "false"]
+          example: "true"
+      responses:
+        "200":
+          description: Listado de álbumes (array vacío si no hay ninguno)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Album" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    post:
+      tags: [Albums]
+      summary: Crea un álbum vacío
+      description: |
+        **Requiere token con rol ADMIN.**
+
+        Crea solo los metadatos: las fotos se suben después con
+        `POST /albums/{id}/imagenes`. El álbum nace **activo** y sin portada.
+
+        El `slug` se genera a partir del título y no se puede elegir. Si el
+        título se repite, se agrega un sufijo (`-2`, `-3`, ...). El autor sale
+        del token, nunca del body.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AlbumInput" }
+      responses:
+        "201":
+          description: Álbum creado. El header `Location` apunta al recurso.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlbumDetalle" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /albums/{id}:
+    get:
+      tags: [Albums]
+      summary: Obtiene un álbum con todas sus fotos
+      security:
+        # Auth opcional: el endpoint es publico, pero si llega un token se usa
+        # (lo necesita `incluirInactivos`). El `{}` es lo que lo marca como
+        # opcional; sin la lista entera, Swagger UI NO manda el token aunque
+        # hayas apretado Authorize, y el request sale anonimo.
+        - {}
+        - bearerAuth: []
+      description: |
+        Endpoint público. A diferencia del listado, este **sí** trae el array
+        completo de `imagenes`, ordenado por fecha de subida.
+
+        Un álbum dado de baja **devuelve 404**, igual que si no existiera: un
+        403 estaría confirmando que existe. Con `incluirInactivos=true` se
+        devuelve de todos modos, pero eso exige un token de ADMIN.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid del álbum
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+        - name: incluirInactivos
+          in: query
+          required: false
+          description: >-
+            Con `true` devuelve el álbum aunque esté dado de baja. **Requiere
+            token con rol ADMIN**: sin él, la respuesta es 403.
+          schema:
+            type: string
+            enum: ["true", "false"]
+      responses:
+        "200":
+          description: El álbum pedido, con sus imágenes
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlbumDetalle" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    patch:
+      tags: [Albums]
+      summary: Modifica un álbum
+      description: |
+        **Requiere token con rol ADMIN.**
+
+        Actualización parcial: se manda solo lo que cambia.
+
+        - omitir un campo → queda como estaba
+        - mandarlo en `null` → se borra (solo `descripcion` y `fecha`)
+        - mandarlo en `""` → 400; para borrar se usa `null`
+
+        **El `slug` no cambia aunque cambie el título**, a propósito: si
+        cambiara, se romperían las URLs ya publicadas.
+
+        Un álbum dado de baja devuelve 404: primero hay que reactivarlo.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid del álbum
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AlbumUpdateInput" }
+      responses:
+        "200":
+          description: El álbum ya modificado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlbumDetalle" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+    delete:
+      tags: [Albums]
+      summary: Da de baja un álbum (baja lógica)
+      description: |
+        **Requiere token con rol ADMIN.**
+
+        **Es también el switch de visibilidad pública.** No borra nada: la fila
+        queda con `activo: false`, las fotos siguen en el servicio de imágenes
+        y se recupera todo con `POST /albums/{id}/reactivar`.
+
+        A partir de acá el álbum desaparece del listado público y su detalle
+        devuelve 404, salvo para un ADMIN que pase `incluirInactivos=true`.
+
+        Consecuencia a tener presente: **las fotos de un álbum dado de baja
+        siguen ocupando espacio en la nube para siempre**. Para liberarlo hay
+        que borrar las imágenes una por una con
+        `DELETE /albums/{id}/imagenes/{imagenId}`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid del álbum
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+      responses:
+        "204":
+          description: Dado de baja. Sin body.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: El álbum no existe o ya estaba dado de baja.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /albums/{id}/reactivar:
+    post:
+      tags: [Albums]
+      summary: Vuelve a mostrar un álbum dado de baja
+      description: |
+        **Requiere token con rol ADMIN.**
+
+        Es idempotente: reactivar un álbum que ya estaba activo devuelve 200 y
+        el álbum igual, sin error.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid del álbum
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+      responses:
+        "200":
+          description: El álbum, ya activo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlbumDetalle" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /albums/{id}/imagenes:
+    post:
+      tags: [Albums]
+      summary: Sube fotos al álbum
+      description: |
+        **Requiere token con rol ADMIN.**
+
+        `multipart/form-data`. Los archivos van en el campo **`imagenes`**; se
+        pueden mandar varios en el mismo request.
+
+        El backend recibe el archivo, lo sube al servicio de imágenes y guarda
+        en la base **solo la URL**. El archivo nunca se guarda en el disco del
+        servidor.
+
+        Límites:
+
+        | | |
+        |---|---|
+        | Tamaño por archivo | 5 MB (`413` si se pasa) |
+        | Archivos por request | 5 (`400` si se pasa) |
+        | Formatos | JPEG, PNG, WebP, AVIF |
+
+        **La primera foto de un álbum sin portada queda de portada
+        automáticamente**, para que el álbum no se vea vacío en el listado.
+
+        Es todo o nada: si falla la subida de una, no se guarda ninguna y se
+        limpia lo que ya se había subido.
+
+        Devuelve el **álbum entero** y no solo las fotos nuevas, porque subir
+        puede haber cambiado la portada y así el front se entera sin pedir el
+        álbum de nuevo.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid del álbum
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [imagenes]
+              properties:
+                imagenes:
+                  type: array
+                  description: De 1 a 5 archivos de imagen.
+                  maxItems: 5
+                  items:
+                    type: string
+                    format: binary
+            encoding:
+              imagenes:
+                contentType: image/jpeg, image/png, image/webp, image/avif
+      responses:
+        "201":
+          description: El álbum con las fotos ya cargadas
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlbumDetalle" }
+        "400":
+          description: >-
+            No vino ningún archivo, el campo del formulario no se llama
+            `imagenes`, el formato no está permitido o se mandaron más de 5.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >-
+            El álbum está dado de baja. Hay que reactivarlo antes de subirle
+            fotos.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413": { $ref: "#/components/responses/PayloadTooLarge" }
+        "502":
+          description: El servicio de imágenes no respondió. No se guardó nada.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /albums/{id}/imagenes/{imagenId}:
+    delete:
+      tags: [Albums]
+      summary: Borra una foto del álbum
+      description: |
+        **Requiere token con rol ADMIN.**
+
+        **Es el único borrado físico del módulo**: saca la fila de la base *y*
+        el archivo de la nube. No se puede deshacer.
+
+        Si la foto era la portada, se promueve automáticamente la más antigua
+        de las que quedan, así el álbum no se ve vacío en el listado.
+
+        Devuelve 404 si la foto no pertenece a **ese** álbum, aunque exista en
+        otro.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid del álbum
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+        - name: imagenId
+          in: path
+          required: true
+          description: cuid de la imagen
+          schema: { type: string }
+          example: clx9z8y7x6w5v4u3t2s1r0q9
+      responses:
+        "204":
+          description: Borrada. Sin body.
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: La imagen no existe en ese álbum.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /albums/{id}/portada:
+    patch:
+      tags: [Albums]
+      summary: Elige qué foto se muestra como portada
+      description: |
+        **Requiere token con rol ADMIN.**
+
+        La imagen tiene que pertenecer a **ese** álbum: si el `imagenId` existe
+        pero es de otro, devuelve 404 y la portada no cambia.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: cuid del álbum
+          schema: { type: string }
+          example: clx1a2b3c4d5e6f7g8h9i0j1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PortadaInput" }
+      responses:
+        "200":
+          description: El álbum con la portada ya cambiada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlbumDetalle" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: La imagen no existe en ese álbum.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+
+  /preinscripciones:
+    post:
+      tags: [Preinscripciones]
+      summary: Crea una preinscripción a una carrera
+      description: |
+        **Endpoint público, sin token.** Es el formulario de la web: el
+        aspirante todavía no es alumno y no tiene cuenta.
+
+        El `carreraId` tiene que ser el de una carrera **activa**, y sale de
+        `GET /carreras`. Si no existe devuelve 404; si esta dada de baja, 409.
+
+        El **documento se normaliza** antes de guardarse: se le sacan puntos,
+        espacios y guiones y se pasa a mayúsculas. Por eso `30.111.222` y
+        `30111222` son el mismo documento y el segundo choca con el primero.
+
+        **Una persona no puede preinscribirse dos veces a la misma carrera**
+        (409), pero sí puede anotarse a varias carreras distintas.
+
+        `fechaNacimiento` va **solo como fecha** (`1990-05-15`), no como
+        datetime: una fecha de nacimiento no tiene hora, y mandar una obligaría
+        a decidir en qué zona horaria interpretarla.
+      responses:
+        "201":
+          description: |
+            La preinscripción creada, con la carrera anidada.
+
+            No trae header `Location`: no existe un `GET /preinscripciones/{id}`
+            al que apuntar.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Preinscripcion" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404":
+          description: La carrera indicada no existe.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: >-
+            La carrera está dada de baja, o ya hay una preinscripción con ese
+            documento para esa carrera.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PreinscripcionInput" }
+
+    get:
+      tags: [Preinscripciones]
+      summary: Lista todas las preinscripciones
+      description: |
+        **Requiere token con rol ADMIN.**
+
+        Es privado a propósito y no admite excepción: cada fila trae documento,
+        fecha de nacimiento, domicilio y teléfono de una persona que ni
+        siquiera es alumno todavía.
+
+        Orden: de la más nueva a la más vieja.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Listado de preinscripciones (array vacío si no hay ninguna)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Preinscripcion" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+
+components:
+
+  securitySchemes:
+    # Es lo que valida `authenticate` en src/middlewares/auth.middleware.js.
+    # Para probar endpoints protegidos desde la UI: boton "Authorize" y pegar
+    # el token SIN el prefijo "Bearer " (la UI lo agrega sola).
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+
+    # Un schema por entidad, a medida que se implementan. Convencion: `X` es
+    # lo que devuelve la API y `XInput` lo que se recibe en el body.
+
+    Sede:
+      type: object
+      description: Una sede del instituto.
+      required: [id, nombre, ciudad, provincia, activa, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          description: cuid generado por la base.
+          examples: ["clx1a2b3c4d5e6f7g8h9i0j1"]
+        nombre:
+          type: string
+          examples: ["Sede Centro"]
+        ciudad:
+          type: string
+          examples: ["Cordoba"]
+        provincia:
+          type: string
+          examples: ["Cordoba"]
+        direccion:
+          type: [string, "null"]
+          examples: ["Av. Colon 1234"]
+        telefono:
+          type: [string, "null"]
+          examples: ["+54 351 4567890"]
+        email:
+          type: [string, "null"]
+          format: email
+          examples: ["centro@instituto.edu.ar"]
+        activa:
+          type: boolean
+          description: >-
+            `false` significa que la sede esta dada de baja. Por defecto esas
+            sedes no aparecen ni en el listado ni en el detalle.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    SedeInput:
+      type: object
+      description: >-
+        Body para crear una sede. No acepta campos que no esten en esta lista:
+        si mandas uno de mas, la respuesta es un 400.
+      required: [nombre, ciudad, provincia]
+      additionalProperties: false
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 120
+          examples: ["Sede Centro"]
+        ciudad:
+          type: string
+          minLength: 1
+          maxLength: 80
+          examples: ["Cordoba"]
+        provincia:
+          type: string
+          minLength: 1
+          maxLength: 80
+          examples: ["Cordoba"]
+        direccion:
+          type: string
+          minLength: 1
+          maxLength: 200
+          examples: ["Av. Colon 1234"]
+        telefono:
+          type: string
+          minLength: 1
+          maxLength: 30
+          examples: ["+54 351 4567890"]
+        email:
+          type: string
+          format: email
+          maxLength: 120
+          examples: ["centro@instituto.edu.ar"]
+
+    SedeUpdateInput:
+      type: object
+      description: >-
+        Body del PATCH. Todos los campos son opcionales, pero hay que mandar al
+        menos uno. Los tres opcionales aceptan `null` para borrar el valor. No
+        acepta campos que no esten en esta lista.
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 120
+          examples: ["Sede Centro II"]
+        ciudad:
+          type: string
+          minLength: 1
+          maxLength: 80
+          examples: ["Cordoba"]
+        provincia:
+          type: string
+          minLength: 1
+          maxLength: 80
+          examples: ["Cordoba"]
+        direccion:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 200
+          description: "`null` borra la direccion."
+          examples: ["Av. Colon 1234"]
+        telefono:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 30
+          description: "`null` borra el telefono."
+          examples: ["+54 351 4567890"]
+        email:
+          type: [string, "null"]
+          format: email
+          maxLength: 120
+          description: "`null` borra el email."
+          examples: ["centro@instituto.edu.ar"]
+
+    SedeDetalle:
+      description: |
+        Una sede con las carreras que se dictan en ella. Lo devuelve
+        `GET /sedes/{id}`.
+
+        Dos cosas a tener en cuenta:
+
+        - Cada elemento de `carreras` viene **envuelto** en un objeto
+          `{ carrera: ... }`. No es un array de carreras: es la tabla
+          intermedia de la relacion N:M. Del lado del front:
+          `sede.carreras.map(c => c.carrera)`.
+        - **Incluye las carreras dadas de baja**, marcadas con
+          `activa: false`. Filtrarlas es decision del front.
+      allOf:
+        - $ref: "#/components/schemas/Sede"
+        - type: object
+          required: [carreras]
+          properties:
+            carreras:
+              type: array
+              description: Ordenadas por nombre de la carrera.
+              items:
+                type: object
+                required: [carrera]
+                properties:
+                  carrera: { $ref: "#/components/schemas/CarreraResumen" }
+
+    Autoridad:
+      type: object
+      properties:
+        id:
+          type: string
+          description: CUID de la autoridad
+        nombre:
+          type: string
+        cargo:
+          type: string
+        imagen:
+          type: string
+          format: uri
+        orden:
+          type: integer
+        descripcion:
+          type: string
+
+    InformacionInstitucional:
+      type: object
+      properties:
+        id:
+          type: string
+          description: CUID de la información institucional
+        sedeId:
+          type: string
+          description: CUID de la sede a la que pertenece
+        nombre:
+          type: string
+        lema:
+          type: string
+        historia:
+          type: string
+        mision:
+          type: string
+        vision:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        autoridades:
+          type: array
+          items:
+            $ref: "#/components/schemas/Autoridad"
+
+    InformacionInstitucionalInput:
+      type: object
+      required:
+        - nombre
+      properties:
+        nombre:
+          type: string
+          example: Instituto Superior Villa del Rosario
+        lema:
+          type: string
+        historia:
+          type: string
+        mision:
+          type: string
+        vision:
+          type: string
+        autoridades:
+          type: array
+          items:
+            type: object
+            required:
+              - nombre
+              - cargo
+            properties:
+              nombre:
+                type: string
+              cargo:
+                type: string
+              imagen:
+                type: string
+                format: uri
+              orden:
+                type: integer
+              descripcion:
+                type: string
+
+    Carrera:
+      type: object
+      description: Una carrera disponible en el instituto.
+      required:
+        - id
+        - nombre
+        - slug
+        - descripcion
+        - duracionAnios
+        - tituloOtorgado
+        - modalidad
+        - activa
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          description: cuid generado por la base.
+          examples: ["clc1a2b3c4d5e6f7g8h9i0j1"]
+
+        nombre:
+          type: string
+          examples: ["Tecnicatura Superior en Programacion"]
+
+        slug:
+          type: string
+          examples: ["tecnicatura-superior-en-programacion"]
+
+        descripcion:
+          type: [string, "null"]
+          examples: ["Carrera orientada al desarrollo de software."]
+
+        duracionAnios:
+          type: [integer, "null"]
+          examples: [3]
+
+        tituloOtorgado:
+          type: [string, "null"]
+          examples: ["Tecnico Superior en Programacion"]
+
+        modalidad:
+          type: string
+          enum: [PRESENCIAL, VIRTUAL, HIBRIDA]
+
+        activa:
+          type: boolean
+          description: >-
+            `false` significa que la carrera esta dada de baja. Por defecto
+            las carreras dadas de baja no aparecen en los endpoints publicos.
+
+        imagenUrl:
+          type: ["string", "null"]
+          format: uri
+          description: >-
+            Imagen representativa de la carrera, servida por CDN. `null` si
+            todavia no se le cargo ninguna. Se gestiona con
+            `PUT` y `DELETE /carreras/{id}/imagen`: **no se puede setear desde
+            el POST ni el PATCH**. Para una miniatura, insertar la
+            transformacion en la URL (`/upload/w_400,q_auto,f_auto/`).
+          examples: ["https://res.cloudinary.com/demo/image/upload/v1/instituto/albums/carreras/abc.jpg"]
+
+        createdAt:
+          type: string
+          format: date-time
+
+        updatedAt:
+          type: string
+          format: date-time
+
+    CarreraResumen:
+      type: object
+      description: >-
+        Version reducida de una Carrera, para cuando viaja anidada dentro de
+        otro recurso. No trae `descripcion` ni los timestamps.
+      required: [id, nombre, slug, modalidad, activa]
+      properties:
+        id:
+          type: string
+          examples: ["clc1a2b3c4d5e6f7g8h9i0j1"]
+        nombre:
+          type: string
+          examples: ["Tecnicatura Superior en Programacion"]
+        slug:
+          type: string
+          examples: ["tecnicatura-superior-en-programacion"]
+        modalidad:
+          type: string
+          enum: [PRESENCIAL, VIRTUAL, HIBRIDA]
+        duracionAnios:
+          type: [integer, "null"]
+          examples: [3]
+        tituloOtorgado:
+          type: [string, "null"]
+          examples: ["Tecnico Superior en Programacion"]
+        activa:
+          type: boolean
+          description: >-
+            `false` significa que la carrera esta dada de baja. Viene igual en
+            la respuesta.
+
+    CarreraInput:
+      type: object
+      description: |
+        Body del `POST /carreras`. No acepta campos de más (da 400).
+
+        El `slug` y el `activa` los pone la API: no se mandan.
+      required: [nombre, modalidad]
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 150
+          examples: ["Tecnicatura Superior en Programacion"]
+        descripcion:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          examples: ["Carrera orientada al desarrollo de software."]
+        duracionAnios:
+          type: integer
+          minimum: 1
+          maximum: 15
+          examples: [3]
+        tituloOtorgado:
+          type: string
+          minLength: 1
+          maxLength: 150
+          examples: ["Tecnico Superior en Programacion"]
+        modalidad:
+          type: string
+          enum: [PRESENCIAL, VIRTUAL, HIBRIDA]
+        sedes:
+          type: array
+          description: >-
+            cuids de las sedes donde se dicta. Opcional. Si alguno no existe,
+            no se crea nada y devuelve 400. **No vuelve en la respuesta**: es
+            un campo de solo escritura.
+          items: { type: string }
+          examples: [["clx1a2b3c4d5e6f7g8h9i0j1"]]
+
+    CarreraUpdateInput:
+      type: object
+      description: |
+        Body del `PATCH /carreras/{id}`. Al menos un campo, y no acepta campos
+        de más.
+
+        - omitir → queda como estaba
+        - `null` → borra el valor (solo los opcionales)
+        - `""` → 400; para borrar se usa `null`
+
+        `slug` no se puede modificar y tampoco cambia solo al cambiar el
+        nombre.
+      minProperties: 1
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 150
+        descripcion:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 2000
+        duracionAnios:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 15
+        tituloOtorgado:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 150
+        modalidad:
+          type: string
+          enum: [PRESENCIAL, VIRTUAL, HIBRIDA]
+        sedes:
+          type: array
+          description: >-
+            **Reemplaza por completo** el conjunto de sedes asignadas, no
+            agrega ni quita de a una. Mandar `[]` la deja sin ninguna.
+          items: { type: string }
+
+    Publicacion:
+      type: object
+      description: Noticia o evento del instituto.
+      required: [id, titulo, slug, contenido, tipo, destacada, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          description: cuid generado por la base.
+          examples: ["clx1a2b3c4d5e6f7g8h9i0j1"]
+        titulo:
+          type: string
+          examples: ["Jornada de Inteligencia Artificial 2026"]
+        slug:
+          type: string
+          description: Slug único generado a partir del título. Permanece estable aunque cambie el título.
+          examples: ["jornada-de-inteligencia-artificial-2026"]
+        resumen:
+          type: [string, "null"]
+          examples: ["Una jornada abierta para estudiantes."]
+        contenido:
+          type: string
+          examples: ["Contenido completo de la noticia..."]
+        tipo:
+          type: string
+          enum: [NOTICIA, EVENTO]
+          examples: ["EVENTO"]
+        imagenUrl:
+          type: [string, "null"]
+          format: uri
+          examples: ["https://example.com/imagen.jpg"]
+        fechaEvento:
+          type: [string, "null"]
+          format: date-time
+          description: Solo para EVENTO. En NOTICIA siempre es null.
+          examples: ["2026-10-20T18:00:00.000Z"]
+        destacada:
+          type: boolean
+          description: Si es destacada aparece primero o resaltada en el front.
+          examples: [true]
+        autorId:
+          type: [string, "null"]
+          description: CUID del autor (usuario que creó la publicación). Null si fue eliminado.
+        autor:
+          type: ["object", "null"]
+          description: Datos del autor sin información sensible. Solo id, nombre y apellido.
+          properties:
+            id:
+              type: string
+            nombre:
+              type: string
+            apellido:
+              type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PublicacionInput:
+      type: object
+      description: >-
+        Body para crear una publicación. El slug se genera automáticamente. No acepta campos que no estén
+        en esta lista: si mandás uno de más, la respuesta es 400. autorId no se envía, se toma del JWT.
+      required: [titulo, contenido, tipo]
+      additionalProperties: false
+      properties:
+        titulo:
+          type: string
+          minLength: 1
+          maxLength: 200
+          examples: ["Jornada de Inteligencia Artificial 2026"]
+        resumen:
+          type: string
+          minLength: 1
+          maxLength: 500
+          examples: ["Una jornada abierta para estudiantes."]
+        contenido:
+          type: string
+          minLength: 1
+          examples: ["Contenido completo de la noticia..."]
+        tipo:
+          type: string
+          enum: [NOTICIA, EVENTO]
+          examples: ["EVENTO"]
+        imagenUrl:
+          type: string
+          format: uri
+          maxLength: 500
+          examples: ["https://example.com/imagen.jpg"]
+        fechaEvento:
+          type: string
+          format: date-time
+          description: Obligatoria si tipo=EVENTO. Debe ser null o omitirse si tipo=NOTICIA.
+          examples: ["2026-10-20T18:00:00.000Z"]
+        destacada:
+          type: boolean
+          default: false
+          examples: [true]
+
+    PublicacionUpdateInput:
+      type: object
+      description: >-
+        Body del PATCH. Todos los campos son opcionales, pero hay que mandar al menos uno.
+        resumen e imagenUrl aceptan `null` para borrar el valor. No acepta campos que no estén en esta lista.
+        Regla tipo/fechaEvento se valida sobre el estado final: EVENTO requiere fechaEvento, NOTICIA fuerza null.
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        titulo:
+          type: string
+          minLength: 1
+          maxLength: 200
+          examples: ["Jornada de Inteligencia Artificial 2026 - Actualizado"]
+        resumen:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 500
+          description: "`null` borra el resumen."
+          examples: ["Resumen actualizado."]
+        contenido:
+          type: string
+          minLength: 1
+          examples: ["Contenido actualizado..."]
+        tipo:
+          type: string
+          enum: [NOTICIA, EVENTO]
+          examples: ["NOTICIA"]
+        imagenUrl:
+          type: [string, "null"]
+          format: uri
+          maxLength: 500
+          description: "`null` borra la imagen."
+          examples: ["https://example.com/nueva-imagen.jpg"]
+        fechaEvento:
+          type: [string, "null"]
+          format: date-time
+          description: "`null` borra la fecha (solo válido si el estado final es NOTICIA)."
+          examples: ["2026-11-15T18:00:00.000Z"]
+        destacada:
+          type: boolean
+          examples: [false]
+
+    Imagen:
+      type: object
+      description: |
+        Una foto de un álbum. `url` es lo único que necesita el front; el
+        identificador interno del servicio de imágenes no se expone, porque
+        borrar es cosa de la API.
+      required: [id, url, createdAt]
+      properties:
+        id: { type: string, example: clx9z8y7x6w5v4u3t2s1r0q9 }
+        url:
+          type: string
+          format: uri
+          description: URL pública de la imagen, servida por CDN.
+          example: https://res.cloudinary.com/demo/image/upload/v1/instituto/albums/clx1a2/foto.jpg
+        width:
+          type: [integer, "null"]
+          description: >-
+            Ancho en píxeles. Sirve para que el front reserve el espacio antes
+            de que cargue la foto y evite el salto de layout.
+          example: 1600
+        height:
+          type: [integer, "null"]
+          example: 1067
+        formato:
+          type: [string, "null"]
+          example: jpg
+        bytes:
+          type: [integer, "null"]
+          description: Peso del archivo original.
+          example: 482913
+        createdAt: { type: string, format: date-time }
+
+    Album:
+      type: object
+      description: |
+        Un álbum tal como sale en el **listado**: con su portada y el total de
+        fotos, pero sin el array completo. Para las fotos, `AlbumDetalle`.
+      required: [id, titulo, slug, activo, cantidadImagenes, createdAt, updatedAt]
+      properties:
+        id: { type: string, example: clx1a2b3c4d5e6f7g8h9i0j1 }
+        titulo: { type: string, example: Acto de colación 2026 }
+        slug:
+          type: string
+          description: >-
+            Se genera del título y no se puede elegir ni modificar. Si el
+            título se repite se agrega un sufijo (`-2`, `-3`, ...).
+          example: acto-de-colacion-2026
+        descripcion:
+          type: [string, "null"]
+          example: Fotos del acto de colación de la promoción 2026.
+        fecha:
+          type: [string, "null"]
+          format: date-time
+          description: Fecha del evento que retrata el álbum, no la de carga.
+          example: "2026-08-15T18:00:00.000Z"
+        activo:
+          type: boolean
+          description: >-
+            Si es `false` el álbum está dado de baja: no aparece en el listado
+            público y su detalle devuelve 404.
+          example: true
+        portadaId: { type: [string, "null"] }
+        portada:
+          description: La foto que se muestra en el listado. `null` si el álbum no tiene fotos.
+          oneOf:
+            - $ref: "#/components/schemas/Imagen"
+            - type: "null"
+        cantidadImagenes:
+          type: integer
+          description: Total de fotos del álbum.
+          example: 24
+        autorId: { type: [string, "null"] }
+        autor:
+          description: Quién lo creó. `null` si el usuario fue eliminado.
+          oneOf:
+            - type: object
+              properties:
+                id: { type: string }
+                nombre: { type: string }
+                apellido: { type: string }
+            - type: "null"
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    AlbumDetalle:
+      description: |
+        Lo mismo que `Album` más el array completo de `imagenes`, ordenado por
+        fecha de subida. Es lo que devuelve el detalle y todas las escrituras.
+      allOf:
+        - $ref: "#/components/schemas/Album"
+        - type: object
+          required: [imagenes]
+          properties:
+            imagenes:
+              type: array
+              items: { $ref: "#/components/schemas/Imagen" }
+
+    AlbumInput:
+      type: object
+      description: |
+        Body del POST. Solo metadatos: las fotos van por
+        `POST /albums/{id}/imagenes`.
+
+        No acepta campos de más (da 400). `slug`, `activo` y el autor los pone
+        la API.
+      required: [titulo]
+      properties:
+        titulo:
+          type: string
+          minLength: 1
+          maxLength: 200
+          example: Acto de colación 2026
+        descripcion:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          example: Fotos del acto de colación de la promoción 2026.
+        fecha:
+          type: string
+          format: date-time
+          description: Fecha del evento, en ISO 8601 con offset.
+          example: "2026-08-15T18:00:00.000Z"
+
+    AlbumUpdateInput:
+      type: object
+      description: |
+        Body del PATCH. Al menos un campo, y no acepta campos de más.
+
+        - omitir → queda como estaba
+        - `null` → borra el valor
+        - `""` → 400; para borrar se usa `null`
+
+        `slug` no se puede modificar y tampoco cambia solo al cambiar el título.
+      minProperties: 1
+      properties:
+        titulo:
+          type: string
+          minLength: 1
+          maxLength: 200
+        descripcion:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 2000
+        fecha:
+          type: [string, "null"]
+          format: date-time
+
+    PortadaInput:
+      type: object
+      description: Body del PATCH /albums/{id}/portada.
+      required: [imagenId]
+      properties:
+        imagenId:
+          type: string
+          description: cuid de una imagen **de ese mismo álbum**.
+          example: clx9z8y7x6w5v4u3t2s1r0q9
+
+    Preinscripcion:
+      type: object
+      description: |
+        Una preinscripción de un aspirante a una carrera. Contiene datos
+        personales, por eso el listado es solo para ADMIN.
+      required:
+        [id, nombre, apellido, documento, fechaNacimiento, nacionalidad,
+         direccion, localidad, provincia, telefono, email, carreraId,
+         createdAt, updatedAt]
+      properties:
+        id: { type: string, examples: ["clp1a2b3c4d5e6f7g8h9i0j1"] }
+        nombre: { type: string, examples: ["Ana"] }
+        apellido: { type: string, examples: ["Perez"] }
+        documento:
+          type: string
+          description: >-
+            Normalizado: sin puntos, espacios ni guiones, en mayúsculas. Se
+            devuelve tal como quedó guardado, no como se escribió.
+          examples: ["30111222"]
+        fechaNacimiento:
+          type: string
+          format: date
+          description: Solo la fecha, sin hora ni zona horaria.
+          examples: ["1995-03-20"]
+        nacionalidad: { type: string, examples: ["Argentina"] }
+        direccion: { type: string, examples: ["San Martin 450"] }
+        localidad: { type: string, examples: ["Rio Cuarto"] }
+        provincia: { type: string, examples: ["Cordoba"] }
+        telefono: { type: string, examples: ["+54 358 4123456"] }
+        email:
+          type: string
+          format: email
+          description: Se guarda en minúsculas.
+          examples: ["ana.perez@example.com"]
+        carreraId: { type: string, examples: ["clc1a2b3c4d5e6f7g8h9i0j1"] }
+        carrera:
+          description: La carrera a la que se anotó, en su versión reducida.
+          $ref: "#/components/schemas/CarreraResumen"
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    PreinscripcionInput:
+      type: object
+      description: |
+        Body del POST. Todos los campos son obligatorios y no acepta campos de
+        más (da 400).
+
+        El `id`, las fechas de auditoría y la forma normalizada del documento
+        los pone la API.
+      required:
+        [nombre, apellido, documento, fechaNacimiento, nacionalidad, direccion,
+         localidad, provincia, telefono, email, carreraId]
+      properties:
+        nombre: { type: string, minLength: 1, maxLength: 80, examples: ["Ana"] }
+        apellido: { type: string, minLength: 1, maxLength: 80, examples: ["Perez"] }
+        documento:
+          type: string
+          minLength: 6
+          maxLength: 20
+          pattern: "^[0-9A-Za-z.\\-\\s]+$"
+          description: >-
+            Admite letras a propósito: no todo aspirante tiene DNI argentino
+            (pasaporte, cédula de otro país). Se puede escribir con puntos; se
+            guarda sin ellos.
+          examples: ["30.111.222"]
+        fechaNacimiento:
+          type: string
+          format: date
+          description: >-
+            `YYYY-MM-DD`. Un datetime completo da 400. No puede ser futura ni
+            de hace más de 120 años.
+          examples: ["1995-03-20"]
+        nacionalidad: { type: string, minLength: 1, maxLength: 60, examples: ["Argentina"] }
+        direccion: { type: string, minLength: 1, maxLength: 150, examples: ["San Martin 450"] }
+        localidad: { type: string, minLength: 1, maxLength: 80, examples: ["Rio Cuarto"] }
+        provincia: { type: string, minLength: 1, maxLength: 80, examples: ["Cordoba"] }
+        telefono:
+          type: string
+          minLength: 7
+          maxLength: 25
+          pattern: "^[0-9+\\-()\\s]+$"
+          examples: ["+54 358 4123456"]
+        email:
+          type: string
+          format: email
+          maxLength: 150
+          examples: ["ana.perez@example.com"]
+        carreraId:
+          type: string
+          description: >-
+            cuid de una carrera **activa**. El front lo saca de `GET /carreras`,
+            que es publico y ya devuelve solo las activas: sirve tal cual para
+            llenar el desplegable del formulario. Si la carrera no existe da
+            404, y si esta dada de baja, 409.
+          examples: ["clc1a2b3c4d5e6f7g8h9i0j1"]
+
+    MensajeContacto:
+      type: object
+      description: Un mensaje enviado desde el formulario de contacto.
+      required: [id, nombre, email, mensaje, estado, createdAt]
+      properties:
+        id:
+          type: string
+          description: cuid generado por la base.
+          examples: ["clx1a2b3c4d5e6f7g8h9i0j1"]
+        nombre:
+          type: string
+          examples: ["Maria Gomez"]
+        email:
+          type: string
+          format: email
+          examples: ["maria.gomez@example.com"]
+        telefono:
+          type: [string, "null"]
+          examples: ["+54 351 4567890"]
+        asunto:
+          type: [string, "null"]
+          examples: ["Consulta sobre inscripcion"]
+        mensaje:
+          type: string
+          examples: ["Queria saber si todavia estan abiertas las inscripciones para el ciclo 2026."]
+        estado:
+          type: string
+          enum: [NO_LEIDO, LEIDO, RESPONDIDO]
+          description: >-
+            Nace en `NO_LEIDO`. Pasa a `RESPONDIDO` automaticamente en cuanto
+            se carga una `respuesta` por primera vez.
+        respuesta:
+          type: [string, "null"]
+          description: Texto de la respuesta del admin. Null hasta que se responde.
+          examples: ["Hola Maria, si, las inscripciones siguen abiertas hasta fin de mes."]
+        respondidoAt:
+          type: [string, "null"]
+          format: date-time
+          description: Se fija automaticamente al cargar la primera respuesta. Null hasta entonces.
+        createdAt:
+          type: string
+          format: date-time
+
+    MensajeContactoInput:
+      type: object
+      description: >-
+        Body del POST /contacto. Es el formulario publico: no incluye
+        `estado`, siempre nace en `NO_LEIDO`. No acepta campos que no esten en
+        esta lista.
+      required: [nombre, email, mensaje]
+      additionalProperties: false
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 120
+          examples: ["Maria Gomez"]
+        email:
+          type: string
+          format: email
+          maxLength: 120
+          examples: ["maria.gomez@example.com"]
+        telefono:
+          type: string
+          minLength: 1
+          maxLength: 30
+          examples: ["+54 351 4567890"]
+        asunto:
+          type: string
+          minLength: 1
+          maxLength: 150
+          examples: ["Consulta sobre inscripcion"]
+        mensaje:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          examples: ["Queria saber si todavia estan abiertas las inscripciones para el ciclo 2026."]
+
+    MensajeContactoUpdateInput:
+      type: object
+      description: >-
+        Body del PATCH /contacto/{id}. Todos los campos son opcionales, pero
+        hay que mandar al menos uno. No acepta campos que no esten en esta
+        lista.
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        estado:
+          type: string
+          enum: [NO_LEIDO, LEIDO, RESPONDIDO]
+          description: >-
+            Se puede setear a mano, por ejemplo para marcar `LEIDO` sin
+            responder todavia.
+          examples: ["LEIDO"]
+        respuesta:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: >-
+            Si el mensaje no tenia una respuesta previa, cargarla fuerza
+            `estado = RESPONDIDO` y fija `respondidoAt`, aunque en el mismo
+            body se haya mandado otro `estado`.
+          examples: ["Hola Maria, si, las inscripciones siguen abiertas hasta fin de mes."]
+
+    Usuario:
+      type: object
+      properties:
+        id:
+          type: string
+          description: CUID del usuario
+        nombre:
+          type: string
+        apellido:
+          type: string
+        email:
+          type: string
+          format: email
+        dni:
+          type: string
+        rol:
+          type: string
+          enum: [ADMIN, USUARIO]
+        activo:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    CrearUsuarioInput:
+      type: object
+      required:
+        - nombre
+        - apellido
+        - email
+        - dni
+        - password
+      properties:
+        nombre:
+          type: string
+          example: Juan
+        apellido:
+          type: string
+          example: Perez
+        email:
+          type: string
+          format: email
+          example: juan.perez@test.com
+        dni:
+          type: string
+          example: 40123456
+        password:
+          type: string
+          format: password
+          minLength: 8
+          example: 12345678
+
+    LoginInput:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          example: juan.perez@test.com
+        password:
+          type: string
+          format: password
+          example: 12345678
+
+    LoginResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            accessToken:
+              type: string
+            refreshToken:
+              type: string
+            usuario:
+              $ref: "#/components/schemas/Usuario"
+
+    LogoutInput:
+      type: object
+      required:
+        - refreshToken
+      properties:
+        refreshToken:
+          type: string
+          description: Refresh token de la sesión
+
+    RecuperarPasswordInput:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+          example: juan.perez@test.com
+
+    RecuperarPasswordResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            message:
+              type: string
+              example: Token de recuperación generado
+            token:
+              type: string
+
+    ResetPasswordInput:
+      type: object
+      required:
+        - token
+        - password
+      properties:
+        token:
+          type: string
+        password:
+          type: string
+          format: password
+          minLength: 8
+
+    ActualizarPerfilInput:
+      type: object
+      properties:
+        nombre:
+          type: string
+        apellido:
+          type: string
+        email:
+          type: string
+          format: email
+        dni:
+          type: string
+
+    CambiarRolInput:
+      type: object
+      required:
+        - rol
+      properties:
+        rol:
+          type: string
+          enum: [ADMIN, USUARIO]
+
+    UsuarioResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: "#/components/schemas/Usuario"
+
+    UsuariosResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Usuario"
+
+    MessageResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+
+    Error:
+      type: object
+      description: Forma de cualquier respuesta de error de la API.
+      required: [success, message]
+      properties:
+        success:
+          type: boolean
+          const: false
+        message:
+          type: string
+          description: Descripcion del error, apta para mostrar al usuario.
+          examples: ["El registro solicitado no existe"]
+        details:
+          description: Informacion extra. Solo aparece en algunos errores.
+        stack:
+          type: string
+          description: >-
+            Traza del error. SOLO se incluye cuando NODE_ENV=development;
+            en produccion nunca se expone.
+
+    ValidationIssue:
+      type: object
+      description: Un campo que no paso la validacion de Zod.
+      required: [source, field, message]
+      properties:
+        source:
+          type: string
+          enum: [body, params, query]
+          description: En que parte del request estaba el campo.
+        field:
+          type: string
+          examples: ["email"]
+        message:
+          type: string
+          examples: ["Invalid email address"]
+
+    ValidationError:
+      type: object
+      description: >-
+        Error 400 devuelto por el middleware `validate()`. A diferencia del
+        resto, `details` trae la lista de campos que fallaron.
+      required: [success, message, details]
+      properties:
+        success:
+          type: boolean
+          const: false
+        message:
+          type: string
+          examples: ["Datos de entrada invalidos"]
+        details:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValidationIssue"
+
+  responses:
+
+    # Respuestas comunes a todos los endpoints. Se referencian asi:
+    #   "404": { $ref: "#/components/responses/NotFound" }
+
+    BadRequest:
+      description: Los datos enviados no pasaron la validacion.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationError"
+
+    Unauthorized:
+      description: Falta el token, es invalido, expiro o la cuenta esta desactivada.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    Forbidden:
+      description: Autenticado, pero el rol no alcanza para esta accion.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    NotFound:
+      description: El recurso no existe.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    Conflict:
+      description: >-
+        Choca con un registro existente: campo unico duplicado (Prisma P2002) o
+        una relacion que impide la operacion (P2003).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    PayloadTooLarge:
+      description: >-
+        Algun archivo supera el limite de 5 MB. No se guardo ninguno.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    InternalError:
+      description: Error inesperado del servidor.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"

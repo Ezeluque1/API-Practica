@@ -1,0 +1,24 @@
+# Dependencias
+node_modules/
+
+# Variables de entorno
+.env
+.env.local
+.env.*.local
+.env.test
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Prisma
+prisma/*.db
+prisma/*.db-journal
+
+# Editor / SO
+.vscode/*
+!.vscode/settings.json
+.idea/
+.DS_Store
+Thumbs.db
