@@ -55,3 +55,6 @@ jobs:
 
       - name: Correr tests de integración
         run: npm run test:integration
+
+      - name: Probar enmascarado
+        run: echo "El jwt  es $JWT_SECRET"
