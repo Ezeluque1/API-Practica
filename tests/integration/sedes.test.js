@@ -51,7 +51,7 @@ describe("POST /sedes", () => {
                     "email": "centro@instituto.edu.ar"
                 });
         
-        expect(res.status).toBe(201);
+        expect(res.status).toBe(999);
         const enlaBase = await prisma.sede.findUnique({ where: { id: res.body.id } });
         expect(enlaBase).not.toBeNull();
         expect(enlaBase.nombre).toBe("Sede Centro");
