@@ -8,6 +8,25 @@ on:
   workflow_dispatch:
 
 jobs:
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+ 
+      - name: Instalar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+ 
+      - name: Instalar dependencias
+        run: npm ci
+ 
+      - name: Correr ESLint
+        run: npm run lint
+
   test:
     runs-on: ubuntu-latest
 
@@ -58,8 +77,18 @@ jobs:
 
       - name: Probar enmascarado
         run: echo "El jwt  es $JWT_SECRET"
+
+  ci-ok:
+    if: always()
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar resultados
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+
   deploy:
-    needs: test
+    needs: ci-ok
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production

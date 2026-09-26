@@ -17,7 +17,7 @@ export function notFoundHandler(req, _res, next) {
  * Manejador de errores centralizado. Express 5 propaga solo los rejects de los
  * handlers `async`, asi que no hace falta envolverlos en un `asyncHandler`.
  */
-// eslint-disable-next-line no-unused-vars -- Express identifica el handler por sus 4 params
+ 
 export function errorHandler(error, _req, res, _next) {
   let statusCode = 500;
   let message = 'Error interno del servidor';
