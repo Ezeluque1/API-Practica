@@ -78,8 +78,6 @@ describe("POST /sedes", () => {
     })
 
     it("Usuario no autenticado", async () => {
-        const usuario = await crearUsuarioDeTest('ADMIN');
-        const token = generarTokenDeTest(usuario.id, usuario.rol);
         const res = await request(app)
             .post("/api/sedes")
             // .set("Authorization", `Bearer ${token}`)
