@@ -1,4 +1,4 @@
-import {crear} from "../../src/services/sede.service.js"
+import {crear, conflictoDeNombre} from "../../src/services/sede.service.js"
 import {prisma} from "../../src/config/prisma.js"
 
 jest.mock("../../src/config/prisma.js", () => ({
